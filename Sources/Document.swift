@@ -21,6 +21,14 @@ extension Array where Element : __DocumentProtocolForArrayAdditions {
         return self.map { $0.bytes }.reduce([], +)
     }
     
+    public init(bsonBytes data: Data, validating: Bool = false) {
+        var buffer = [UInt8](repeating: 0, count:  data.count)
+        
+        data.copyBytes(to: &buffer, count: buffer.count)
+        
+        self.init(bsonBytes: buffer, validating: validating)
+    }
+    
     public init(bsonBytes bytes: [UInt8], validating: Bool = false) {
         var array = [Element]()
         var position = 0
@@ -80,7 +88,7 @@ public enum ElementType : UInt8 {
 
 /// `Document` is a collection type that uses a BSON document as storage.
 /// As such, it can be stored in a file or instantiated from BSON data.
-/// 
+///
 /// Documents behave partially like an array, and partially like a dictionary.
 /// For general information about BSON documents, see http://bsonspec.org/spec.html
 public struct Document : Collection, ExpressibleByDictionaryLiteral, ExpressibleByArrayLiteral {
@@ -88,6 +96,7 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     internal var _count: Int? = nil
     internal var invalid = false
     internal var elementPositions = [Int]()
+    internal var isArray: Bool = false
     
     // MARK: - Initialization from data
     
@@ -105,34 +114,36 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     ///
     /// - parameters data: the `[Byte]` that's being used to initialize this `Document`
     public init(data: [UInt8]) {
-        guard let length = try? Int(fromBytes(data[0...3]) as Int32), length <= data.count else {
-            self.storage = [5,0,0,0,0]
+        guard let length = try? Int(fromBytes(data[0...3]) as Int32), length <= data.count, data.last == 0x00 else {
+            self.storage = [5,0,0,0]
             self.invalid = true
             return
         }
         
-        storage = Array(data[0..<length])
+        storage = Array(data[0..<Swift.max(length - 1, 0)])
         elementPositions = buildElementPositionsCache()
+        isArray = validatesAsArray()
     }
     
     /// Initializes this Doucment with an `Array` of `Byte`s - I.E: `[Byte]`
     ///
     /// - parameters data: the `[Byte]` that's being used to initialize this `Document`
     public init(data: ArraySlice<UInt8>) {
-        guard let length = try? Int(fromBytes(data[0...3]) as Int32), length <= data.count else {
-            self.storage = [5,0,0,0,0]
+        guard let length = try? Int(fromBytes(data[0...3]) as Int32), length < data.count else {
+            self.storage = [5,0,0,0]
             self.invalid = true
             return
         }
         
         storage = Array(data[0..<length])
         elementPositions = buildElementPositionsCache()
+        isArray = self.validatesAsArray()
     }
     
     /// Initializes an empty `Document`
     public init() {
         // the empty document is 5 bytes long.
-        storage = [5,0,0,0,0]
+        storage = [5,0,0,0]
     }
     
     // MARK: - Initialization from Swift Types & Literals
@@ -141,10 +152,27 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     ///
     /// - parameter elements: The `Dictionary`'s generics used to initialize this must be a `String` key and `Value` for the value
     public init(dictionaryElements elements: [(String, Value)]) {
-        self.init()
-        for element in elements {
-            self.append(element.1, forKey: element.0)
+        storage = [5,0,0,0]
+        
+        for (key, value) in elements {
+            // Append the key-value pair
+            
+            // Add element to positions cache
+            elementPositions.append(storage.endIndex)
+            
+            // Type identifier
+            storage.append(value.typeIdentifier)
+            // Key
+            storage.append(contentsOf: key.utf8)
+            // Key null terminator
+            storage.append(0x00)
+            // Value
+            storage.append(contentsOf: value.bytes)
         }
+        
+        updateDocumentHeader()
+        
+        isArray = false
     }
     
     /// Initializes this `Document` as a `Dictionary` using a `Dictionary` literal
@@ -165,7 +193,27 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     ///
     /// - parameter elements: The `Array` used to initialize the `Document` must be a `[Value]`
     public init(array elements: [Value]) {
-        self.init(dictionaryElements: elements.enumerated().map { (index, value) in ("\(index)", value) })
+        storage = [5,0,0,0]
+        
+        for (index, value) in elements.enumerated() {
+            // Append the values
+            
+            // Add element to positions cache
+            elementPositions.append(storage.endIndex)
+            
+            // Type identifier
+            storage.append(value.typeIdentifier)
+            // Key
+            storage.append(contentsOf: "\(index)".utf8)
+            // Key null terminator
+            storage.append(0x00)
+            // Value
+            storage.append(contentsOf: value.bytes)
+        }
+        
+        updateDocumentHeader()
+        
+        isArray = true
     }
     
     // MARK: - Manipulation & Extracting values
@@ -182,10 +230,7 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     /// - parameter key: The key in the key-value pair
     public mutating func append(_ value: Value, forKey key: String) {
         // We're going to insert the element before the Document null terminator
-        elementPositions.append(storage.endIndex-1)
-        
-        // Remove Document Null Terminator
-        storage.removeLast()
+        elementPositions.append(storage.endIndex)
         
         // Append the key-value pair
         // Type identifier
@@ -197,11 +242,10 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
         // Value
         storage.append(contentsOf: value.bytes)
         
-        // Reappend the Document null terminator
-        storage.append(0x00)
-        
         // Increase the bytecount
         updateDocumentHeader()
+        
+        isArray = false
     }
     
     /// Appends a `Value` to this `Document` where this `Document` acts like an `Array`
@@ -211,7 +255,22 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     /// - parameter value: The `Value` to append
     public mutating func append(_ value: Value) {
         let key = "\(self.count)"
-        self.append(value, forKey: key)
+        
+        // We're going to insert the element before the Document null terminator
+        elementPositions.append(storage.endIndex)
+        
+        // Append the key-value pair
+        // Type identifier
+        storage.append(value.typeIdentifier)
+        // Key
+        storage.append(contentsOf: key.utf8)
+        // Key null terminator
+        storage.append(0x00)
+        // Value
+        storage.append(contentsOf: value.bytes)
+        
+        // Increase the bytecount
+        updateDocumentHeader()
     }
     
     /// Appends the convents of `otherDocument` to `self` overwriting any keys in `self` with the `otherDocument` equivalent in the case of duplicates
@@ -225,7 +284,9 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
     
     /// Updates this `Document`'s storage to contain the proper `Document` length header
     internal mutating func updateDocumentHeader() {
-        storage.replaceSubrange(0..<4, with: Int32(storage.count).bytes)
+        // One extra byte for the missing null terminator in the storage
+        var count = Int32(storage.count + 1)
+        memcpy(&storage, &count, 4)
     }
     
     // MARK: - Collection
@@ -300,6 +361,10 @@ public struct Document : Collection, ExpressibleByDictionaryLiteral, Expressible
         let val = getValue(atDataPosition: meta.dataPosition, withType: meta.type)
         let length = getLengthOfElement(withDataPosition: meta.dataPosition, type: meta.type)
         
+        guard meta.dataPosition + length <= storage.count else {
+            return nil
+        }
+        
         storage.removeSubrange(meta.elementTypePosition..<meta.dataPosition + length)
         
         let removedLength = (meta.dataPosition + length) - meta.elementTypePosition
@@ -350,7 +415,7 @@ public struct DocumentIndex : Comparable {
 extension Sequence where Iterator.Element == Document {
     /// Converts a sequence of Documents to an array of documents in BSON format
     public func makeDocument() -> Document {
-        var combination = Document()
+        var combination = [] as Document
         for doc in self {
             combination.append(~doc)
         }

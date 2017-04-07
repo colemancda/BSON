@@ -29,7 +29,7 @@ extension Document {
     ///         "details.chicken": "fred"
     ///     ]
     ///
-    public mutating func flatten() {
+    public mutating func flatten(skippingArrays skipArrays: Bool = false) {
         enum FlattenError : Error {
             case invalidDocument
         }
@@ -47,7 +47,7 @@ extension Document {
             }
             
             // Loop over all the elements of this document:
-            while storage[index] != 0 {
+            while index < storage.count && storage[index] != 0 {
                 if !isRootDocument {
                     // Prefix the key, and a full stop (.)
                     storage.insert(0x2e, at: index+1)
@@ -59,7 +59,7 @@ extension Document {
                 }
                 
                 // If the element is not a document (or array, which is a document), move past it.
-                guard type == .arrayDocument || type == .document else {
+                guard (type == .arrayDocument && !skipArrays) || type == .document else {
                     index = dataPosition + getLengthOfElement(withDataPosition: dataPosition, type: type)
                     continue
                 }

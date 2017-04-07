@@ -23,7 +23,7 @@ extension Document : Equatable {
             }
         }
         
-        return true
+        return lhs.isArray == rhs.isArray
     }
     
     /// Returns true if `lhs` and `rhs` store the same serialized data.
@@ -55,8 +55,6 @@ extension Document {
                 lhs.removeValue(forKey: key)
             }
         }
-        
-        lhs.storage.removeLast()
         
         let appendData = rhs.storage[4..<rhs.storage.endIndex]
         lhs.storage.append(contentsOf: appendData)

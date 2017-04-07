@@ -48,14 +48,14 @@ public struct ObjectId {
         var data = [UInt8]()
         
         // Take the current UNIX epoch as Int32 and take it's bytes
-        data += Int32(currentTime.timeIntervalSince1970).bytes
+        data += Int32(currentTime.timeIntervalSince1970).makeBytes()
         
         // Take a random number
-        data += ObjectId.random.bytes
+        data += ObjectId.random.makeBytes()
         
         // And add a counter as 2 bytes and increment it
         ObjectId.counterQueue.sync {
-            data += ObjectId.counter.bytes
+            data += ObjectId.counter.makeBytes()
             ObjectId.counter = ObjectId.counter &+ 1
         }
         
@@ -69,7 +69,7 @@ public struct ObjectId {
     /// Throws errors in case of an invalid string (e.g. wrong length)
     public init(_ hexString: String) throws {
         guard hexString.characters.count == 24 else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.InvalidObjectIdLength
         }
         
         var data = [UInt8]()
@@ -86,7 +86,7 @@ public struct ObjectId {
         }
         
         guard data.count == 12 else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.InvalidObjectIdLength
         }
         
         self._storage = data
@@ -102,7 +102,7 @@ public struct ObjectId {
     /// Throws when there are not exactly 12 bytes provided
     public init(bytes data: [UInt8]) throws {
         guard data.count == 12 else {
-            throw DeserializationError.InvalidElementSize
+            throw DeserializationError.invalidElementSize
         }
 
         self._storage = data
@@ -119,6 +119,24 @@ public struct ObjectId {
         }
         
         return String(bytes: bytes, encoding: .utf8)!
+    }
+    
+    public var epoch: Date {
+        let epoch = try! fromBytes(_storage[0...3]) as Int32
+        
+        return Date(timeIntervalSince1970: Double(epoch))
+    }
+}
+
+extension ObjectId: Hashable {
+    public var hashValue: Int {
+        let epoch = try! fromBytes(_storage[0...3]) as Int32
+        let random = try! fromBytes(_storage[4...7]) as Int32
+        let increment = try! fromBytes(_storage[8...11]) as Int32
+        
+        let total: Int32 = epoch &+ random &+ increment
+        
+        return Int(total)
     }
 }
 

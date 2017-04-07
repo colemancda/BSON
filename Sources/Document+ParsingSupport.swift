@@ -10,7 +10,7 @@ import Foundation
 
 public func fromBytes<T, S : Collection>(_ bytes: S) throws -> T where S.Iterator.Element == UInt8, S.IndexDistance == Int {
     guard bytes.count >= MemoryLayout<T>.size else {
-        throw DeserializationError.InvalidElementSize
+        throw DeserializationError.invalidElementSize
     }
     
     return UnsafeRawPointer([UInt8](bytes)).assumingMemoryBound(to: T.self).pointee
@@ -50,14 +50,17 @@ extension Document {
                 
                 let keyPos = position - keyPositionOffset
                 
-                // there is still a chance that this is the key, so check for that.
-                if isKey && keyBytes.count > keyPos {
-                    isKey = keyBytes[keyPos] == character
-                }
-                
                 if character == 0 {
+                    if keyBytes.count != keyPos {
+                        isKey = false
+                    }
+                    
                     didEnd = true
                     break keyComparison // end of key data
+                } else if isKey && keyBytes.count > keyPos {
+                    isKey = keyBytes[keyPos] == character
+                } else {
+                    isKey = false
                 }
             }
             
@@ -92,7 +95,7 @@ extension Document {
         do {
             // check
             func need(_ amountOfBytes: Int) -> Bool {
-                return self.storage.count >= position + amountOfBytes + 1 // the document also has a trailing null
+                return self.storage.count >= position + amountOfBytes // the document doesn't have a trailing null until the bytes are fetched
             }
             
             switch type {
@@ -180,7 +183,6 @@ extension Document {
             
             return startPosition
         }
-        
         
         var cache = [Int]()
         

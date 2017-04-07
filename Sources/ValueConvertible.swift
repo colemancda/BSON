@@ -65,7 +65,7 @@ extension String : ValueConvertible {
 extension Document : ValueConvertible {
     /// Converts this instance to a BSON `Value`
     public func makeBsonValue() -> Value {
-        return self.validatesAsArray() ? .array(self) : .document(self)
+        return self.validatesAsArray() && self.isArray ? .array(self) : .document(self)
     }
 }
 
@@ -73,6 +73,45 @@ extension ObjectId : ValueConvertible {
     /// Converts this instance to a BSON `Value`
     public func makeBsonValue() -> Value {
         return .objectId(self)
+    }
+}
+
+extension Data : ValueConvertible {
+    /// Converts this instance to a BSON `Value`
+    public func makeBsonValue() -> Value {
+        var array = [UInt8](repeating: 0, count: self.count)
+        self.copyBytes(to: &array, count: array.count)
+        
+        return .binary(subtype: .generic, data: array)
+    }
+}
+
+extension RegularExpression : ValueConvertible {
+    /// Converts this instance to a BSON `Value`
+    public func makeBsonValue() -> Value {
+        func makeOptions() -> String {
+            var options = ""
+            
+            if self.options.contains(.caseInsensitive) {
+                options.append("i")
+            }
+            
+            if self.options.contains(.anchorsMatchLines) {
+                options.append("m")
+            }
+            
+            if self.options.contains(.allowCommentsAndWhitespace) {
+                options.append("x")
+            }
+            
+            if self.options.contains(.dotMatchesLineSeparators) {
+                options.append("s")
+            }
+            
+            return options
+        }
+        
+        return .regularExpression(pattern: self.pattern, options: makeOptions())
     }
 }
 

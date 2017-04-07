@@ -39,7 +39,7 @@ public extension String {
     private static func _instant(bytes data: [UInt8]) throws -> (Int, String) {
         // Check for null-termination and at least 5 bytes (length spec + terminator)
         guard data.count >= 5 && data.last == 0x00 else {
-            throw DeserializationError.InvalidLastElement
+            throw DeserializationError.invalidLastElement
         }
         
         // Get the length
@@ -47,7 +47,7 @@ public extension String {
         
         // Check if the data is at least the right size
         guard data.count >= Int(length) + 4 else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.invalidElementSize
         }
         
         // Empty string
@@ -56,13 +56,13 @@ public extension String {
         }
         
         guard length > 0 else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.invalidElementSize
         }
         
         var stringData = Array(data[4..<Int(length + 3)])
         
         guard let string = String(bytesNoCopy: &stringData, length: stringData.count, encoding: String.Encoding.utf8, freeWhenDone: false) else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.unableToInstantiateString(fromBytes: stringData)
         }
         
         return (Int(length + 4), string)
@@ -84,15 +84,15 @@ public extension String {
     
     private static func _cInstant(bytes data: [UInt8]) throws -> (Int, String) {
         guard data.contains(0x00) else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.missingNullTerminatorInString
         }
         
         guard let stringData = data.split(separator: 0x00, maxSplits: 1, omittingEmptySubsequences: false).first else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.noCStringFound
         }
         
         guard let string = String(bytes: stringData, encoding: String.Encoding.utf8) else {
-            throw DeserializationError.ParseError
+            throw DeserializationError.unableToInstantiateString(fromBytes: Array(stringData))
         }
         
         return (stringData.count+1, string)
@@ -100,17 +100,126 @@ public extension String {
 }
 
 public protocol BSONBytesProtocol {}
-extension Int : BSONBytesProtocol {}
-extension Int64 : BSONBytesProtocol {}
-extension Int32 : BSONBytesProtocol {}
-extension Int16 : BSONBytesProtocol {}
-extension Int8 : BSONBytesProtocol {}
-extension UInt : BSONBytesProtocol {}
-extension UInt64 : BSONBytesProtocol {}
-extension UInt32 : BSONBytesProtocol {}
-extension UInt16 : BSONBytesProtocol {}
-extension UInt8 : BSONBytesProtocol {}
-extension Double : BSONBytesProtocol {}
+
+internal protocol BSONMakeBytesProtocol: BSONBytesProtocol {
+    func makeBytes() -> [UInt8]
+}
+
+extension Int : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        var integer = self
+        return withUnsafePointer(to: &integer) {
+            $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout<Int>.size) {
+                Array(UnsafeBufferPointer(start: $0, count: MemoryLayout<Int>.size))
+            }
+        }
+    }
+}
+
+extension Int64 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [
+            UInt8(self & 0xFF),
+            UInt8((self >> 8) & 0xFF),
+            UInt8((self >> 16) & 0xFF),
+            UInt8((self >> 24) & 0xFF),
+            UInt8((self >> 32) & 0xFF),
+            UInt8((self >> 40) & 0xFF),
+            UInt8((self >> 48) & 0xFF),
+            UInt8((self >> 56) & 0xFF),
+        ]
+    }
+}
+
+extension Int32 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [
+            UInt8(self & 0xFF),
+            UInt8((self >> 8) & 0xFF),
+            UInt8((self >> 16) & 0xFF),
+            UInt8((self >> 24) & 0xFF),
+        ]
+    }
+}
+
+extension Int16 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [
+            UInt8((self >> 8) & 0xFF),
+            UInt8(self & 0xFF)
+        ]
+    }
+}
+
+extension Int8 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [UInt8(self)]
+    }
+}
+
+extension UInt : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        var integer = self
+        return withUnsafePointer(to: &integer) {
+            $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout<UInt>.size) {
+                Array(UnsafeBufferPointer(start: $0, count: MemoryLayout<UInt>.size))
+            }
+        }
+    }
+}
+
+extension UInt64 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [
+            UInt8(self & 0xFF),
+            UInt8((self >> 8) & 0xFF),
+            UInt8((self >> 16) & 0xFF),
+            UInt8((self >> 24) & 0xFF),
+            UInt8((self >> 32) & 0xFF),
+            UInt8((self >> 40) & 0xFF),
+            UInt8((self >> 48) & 0xFF),
+            UInt8((self >> 56) & 0xFF),
+        ]
+    }
+}
+
+extension UInt32 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [
+            UInt8(self & 0xFF),
+            UInt8((self >> 8) & 0xFF),
+            UInt8((self >> 16) & 0xFF),
+            UInt8((self >> 24) & 0xFF),
+        ]
+    }
+}
+
+extension UInt16 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [
+            UInt8(self & 0xFF),
+            UInt8((self >> 8) & 0xFF)
+        ]
+    }
+}
+
+extension UInt8 : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        return [self]
+    }
+}
+
+extension Double : BSONBytesProtocol {
+    internal func makeBytes() -> [UInt8] {
+        var integer = self
+        return withUnsafePointer(to: &integer) {
+            $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout<Double>.size) {
+                Array(UnsafeBufferPointer(start: $0, count: MemoryLayout<Double>.size))
+            }
+        }
+    }
+}
+
 extension BSONBytesProtocol {
     /// The bytes in `Self`
     public var bytes : [UInt8] {
